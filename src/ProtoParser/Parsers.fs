@@ -45,44 +45,32 @@ module Parsers =
     let penumType<'a> : Parser<_, 'a> = 
         opt (pstring ".") .>>. pfullIdent |>> (fun (pt, id) -> (Option.isSome pt, id) |> EnumType) 
     
-    let private chTo10L =
-            [
-                '0', 0L; '1', 1L; '2', 2L; '3', 3L; '4', 4L; '5', 5L; '6', 6L; 
-                '7', 7L; '8', 8L; '9', 9L;
-            ] 
-    let private chTo10 = chTo10L |> Map.ofList
-             
+                
 
     let private chTo16 = 
-        chTo10L 
-        |> List.append [ 'a', 10L; 'b', 11L; 'c', 12L; 'd', 13L; 'e', 14L; 'f', 15L ]
-        |> List.append [ 'A', 10L; 'B', 11L; 'C', 12L; 'D', 13L; 'E', 14L; 'F', 15L ]
+        [ '0', 0uy; '1', 1uy; '2', 2uy; '3', 3uy; '4', 4uy; '5', 5uy; '6', 6uy; '7', 7uy; '8', 8uy; '9', 9uy; ]
+        |> List.append [ 'a', 10uy; 'b', 11uy; 'c', 12uy; 'd', 13uy; 'e', 14uy; 'f', 15uy ]
+        |> List.append [ 'A', 10uy; 'B', 11uy; 'C', 12uy; 'D', 13uy; 'E', 14uy; 'F', 15uy ]
         |> Map.ofList
         
-    
-    let phexLiteral<'a> : Parser<_, 'a> =
-        let rec toLong a l =
-            match l with
-            | [] -> a
-            | [ch] -> a * 16L + chTo16.[ch] 
-            | h :: tr -> toLong (a * 16L + chTo16.[h]) tr
-        ((pstring "0x") <|> (pstring "0X")) >>. (many1 phexDigit) |>> toLong 0L
+    let chDigitToByte ch = chTo16.[ch]
+    let chDigitToInt64 = chDigitToByte >> int64
 
-    let poctalLiteral<'a> : Parser<_, 'a> =
-        let rec toLong a l =
-            match l with
-            | [] -> a
-            | [ch] -> a * 8L + chTo16.[ch] 
-            | h :: tr -> toLong (a * 8L + chTo16.[h]) tr
-        pstring "0" >>. (many1 poctalDigit) |>> toLong 0L
+    let rec private chlToInt64 bs st chl =
+        match chl with
+        | [] -> st
+        | [ch] -> st * bs + (chDigitToInt64 ch)
+        | h :: tr -> chlToInt64 bs (st * bs + (chDigitToInt64 h)) tr
+
+
+    let phexLiteral< 'a>  : Parser<int64, 'a> =
+        ((pstring "0x") <|> (pstring "0X")) >>. (many1 phexDigit) |>> chlToInt64 16L 0L
+
+    let poctalLiteral<'a> : Parser<int64, 'a> =
+        pstring "0" >>. (many1 poctalDigit) |>> chlToInt64 8L 0L
 
     let pdecimalLiteral<'a> : Parser<_, 'a> =
-        let rec toLong a l =
-            match l with
-            | [] -> a
-            | [ch] -> a * 10L + chTo16.[ch] 
-            | h :: tr -> toLong (a * 10L + chTo16.[h]) tr
-        anyOf ['1'..'9'] .>>. (many1 pdecimalDigit)  |>> (fun (a, b) -> List.append [a] b |> toLong 0L)
+        anyOf ['1'..'9'] .>>. (many1 pdecimalDigit)  |>> (fun (a, b) -> List.append [a] b |> chlToInt64 10L 0L)
     
     let pintLiteral<'a> : Parser<_, 'a> =
         phexLiteral <|> poctalLiteral <|> pdecimalLiteral
@@ -91,3 +79,24 @@ module Parsers =
                    
     let pboolLit<'a> : Parser<_, 'a> =
         (pstring "true" |>> (fun _ -> true)) <|>(pstring "false" |>> (fun _ -> false))
+    
+    let pquote<'a> : Parser<_, 'a> = anyOf ['\''; '"'] 
+    let pcharEscape<'a> : Parser<_, 'a> = 
+        let pairs = 
+            [
+                'a', '\a'; 'b', '\b'; 'f', '\f'; 'n', '\n'; 'r', '\r'; 't', '\t'; 'v', '\v'; '\\', '\\'; '\'', '\''; '"', '"'
+            ]
+        let escaped = 
+            pairs |> Map.ofList
+        let vals = pairs |> List.map snd
+        pchar '\\' >>. anyOf vals |>> (fun p -> Map.find p escaped)
+    let poctExcape<'a> : Parser<_, 'a> =
+        pchar '\\' >>. (pipe3 poctalDigit poctalDigit poctalDigit (fun a b c -> [a; b; c;] |> chlToInt64 8L 0L |> char))
+    let phexEscape<'a> : Parser<_, 'a> =
+        ((pstring "0x") <|> (pstring "0X")) >>. (pipe2 phexDigit phexDigit (fun a b -> [a; b; ] |> chlToInt64 16L 0L |> char))
+    
+    let pcharNoEscape<'a> : Parser<_, 'a> = noneOf [ '\x00' ; '\\'; '\n']
+
+    let pcharValue<'a> : Parser<_, 'a> = phexEscape <|> poctExcape <|> pcharEscape <|> pcharNoEscape
+    //let pstrLiteral<'a> : Parser<_, 'a> = () 
+        
